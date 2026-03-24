@@ -1,9 +1,19 @@
 #![cfg(test)]
 use super::*;
+ feature/emergency-pause-circuit-breaker
 use soroban_sdk::{testutils::{Address as _, Ledger}, Address, Env, String, vec};
 use crate::contests::{Contest, ContestEntry, ContestMetric, ContestStatus};
 use crate::types::{SignalAction, SignalStatus};
 use crate::categories::{RiskLevel, SignalCategory};
+
+use crate::categories::{RiskLevel, SignalCategory};
+use crate::contests::{Contest, ContestEntry, ContestMetric, ContestStatus};
+use crate::types::{Signal, SignalAction, SignalStatus};
+use soroban_sdk::{
+    testutils::{Address as _, Ledger},
+    Address, Env, String,
+};
+ main
 
 fn setup<'a>(env: &'a Env) -> (Address, SignalRegistryClient<'a>) {
     env.mock_all_auths();
@@ -85,7 +95,7 @@ fn test_auto_enter_signal() {
 
     let contest = client.get_contest(&contest_id);
     let entry = contest.entries.get(provider.clone()).unwrap();
-    
+
     assert_eq!(entry.signals_submitted.len(), 1);
     assert_eq!(entry.total_roi, 150);
     assert_eq!(entry.total_volume, 1000);

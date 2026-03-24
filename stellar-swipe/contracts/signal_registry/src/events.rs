@@ -114,7 +114,11 @@ pub fn emit_collaborative_signal_created(env: &Env, signal_id: u64, authors: Vec
 }
 
 pub fn emit_collaborative_signal_approved(env: &Env, signal_id: u64, approver: Address) {
-    let topics = (Symbol::new(env, "collab_signal_approved"), signal_id, approver);
+    let topics = (
+        Symbol::new(env, "collab_signal_approved"),
+        signal_id,
+        approver,
+    );
     env.events().publish(topics, ());
 }
 
@@ -152,6 +156,7 @@ pub fn emit_copy_recorded(env: &Env, user: Address, signal_id: u64, version: u32
     let topics = (Symbol::new(env, "copy_recorded"), signal_id, user);
     env.events().publish(topics, version);
 }
+ feature/emergency-pause-circuit-breaker
 
 pub fn emit_emergency_paused(env: &Env, category: String, paused_by: Address, reason: String, auto_unpause_at: Option<u64>) {
     let topics = (Symbol::new(env, "emergency_paused"), category, paused_by);
@@ -167,3 +172,5 @@ pub fn emit_circuit_breaker_triggered(env: &Env, category: String, reason: Strin
     let topics = (Symbol::new(env, "circuit_breaker_triggered"), category);
     env.events().publish(topics, reason);
 }
+
+ main

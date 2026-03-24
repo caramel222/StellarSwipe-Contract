@@ -5,10 +5,14 @@ extern crate std;
 use super::*;
 use soroban_sdk::{testutils::Address as _, testutils::Ledger, Env, String, Vec, vec};
 
+ feature/emergency-pause-circuit-breaker
 use crate::combos::{
     ComboStatus, ComboType, Condition, ConditionType, ComponentSignal, ConditionGate,
 };
 use crate::categories::{SignalCategory, RiskLevel};
+
+use crate::combos::{ComboStatus, ComboType, ComponentSignal, Condition, ConditionType};
+ main
 
 // -----------------------------------------------------------------------
 // Helpers
@@ -111,11 +115,31 @@ fn test_create_sequential_combo() {
     let sig2 = make_signal(&env, &client, &provider);
 
     let mut comps = Vec::new(&env);
+ feature/emergency-pause-circuit-breaker
     comps.push_back(ComponentSignal { signal_id: sig1, weight: 3333, condition: ConditionGate::None });
     comps.push_back(ComponentSignal { signal_id: sig2, weight: 3333, condition: ConditionGate::None });
     // 3334 to make sum exactly 10000
     let sig3 = make_signal(&env, &client, &provider);
     comps.push_back(ComponentSignal { signal_id: sig3, weight: 3334, condition: ConditionGate::None });
+
+    comps.push_back(ComponentSignal {
+        signal_id: sig1,
+        weight: 3333,
+        condition: None,
+    });
+    comps.push_back(ComponentSignal {
+        signal_id: sig2,
+        weight: 3333,
+        condition: None,
+    });
+    // 3334 to make sum exactly 10000
+    let sig3 = make_signal(&env, &client, &provider);
+    comps.push_back(ComponentSignal {
+        signal_id: sig3,
+        weight: 3334,
+        condition: None,
+    });
+ main
 
     let combo_id = client
         .create_combo_signal(
@@ -173,8 +197,21 @@ fn test_create_combo_invalid_weights_fails() {
     let sig2 = make_signal(&env, &client, &provider);
 
     let mut comps = Vec::new(&env);
+ feature/emergency-pause-circuit-breaker
     comps.push_back(ComponentSignal { signal_id: sig1, weight: 4000, condition: ConditionGate::None });
     comps.push_back(ComponentSignal { signal_id: sig2, weight: 4000, condition: ConditionGate::None });
+
+    comps.push_back(ComponentSignal {
+        signal_id: sig1,
+        weight: 4000,
+        condition: None,
+    });
+    comps.push_back(ComponentSignal {
+        signal_id: sig2,
+        weight: 4000,
+        condition: None,
+    });
+ main
     // total = 8000, not 10000
 
     let result = client.try_create_combo_signal(
@@ -215,8 +252,21 @@ fn test_create_combo_signal_not_found_fails() {
     let sig1 = make_signal(&env, &client, &provider);
 
     let mut comps = Vec::new(&env);
+ feature/emergency-pause-circuit-breaker
     comps.push_back(ComponentSignal { signal_id: sig1, weight: 5000, condition: ConditionGate::None });
     comps.push_back(ComponentSignal { signal_id: 999, weight: 5000, condition: ConditionGate::None }); // non-existent
+
+    comps.push_back(ComponentSignal {
+        signal_id: sig1,
+        weight: 5000,
+        condition: None,
+    });
+    comps.push_back(ComponentSignal {
+        signal_id: 999,
+        weight: 5000,
+        condition: None,
+    }); // non-existent 
+  main
 
     let result = client.try_create_combo_signal(
         &provider,
@@ -252,7 +302,15 @@ fn test_create_combo_invalid_condition_reference_fails() {
     let sig2 = make_signal(&env, &client, &provider);
 
     let mut comps = Vec::new(&env);
+ feature/emergency-pause-circuit-breaker
     comps.push_back(ComponentSignal { signal_id: sig1, weight: 5000, condition: ConditionGate::None });
+
+    comps.push_back(ComponentSignal {
+        signal_id: sig1,
+        weight: 5000,
+        condition: None,
+    });
+ main
     comps.push_back(ComponentSignal {
         signal_id: sig2,
         weight: 5000,
@@ -320,9 +378,27 @@ fn test_execute_sequential_combo() {
     let sig3 = make_signal(&env, &client, &provider);
 
     let mut comps = Vec::new(&env);
+ feature/emergency-pause-circuit-breaker
     comps.push_back(ComponentSignal { signal_id: sig1, weight: 3333, condition: ConditionGate::None });
     comps.push_back(ComponentSignal { signal_id: sig2, weight: 3333, condition: ConditionGate::None });
     comps.push_back(ComponentSignal { signal_id: sig3, weight: 3334, condition: ConditionGate::None });
+
+    comps.push_back(ComponentSignal {
+        signal_id: sig1,
+        weight: 3333,
+        condition: None,
+    });
+    comps.push_back(ComponentSignal {
+        signal_id: sig2,
+        weight: 3333,
+        condition: None,
+    });
+    comps.push_back(ComponentSignal {
+        signal_id: sig3,
+        weight: 3334,
+        condition: None,
+    });
+ main
 
     let combo_id = client
         .create_combo_signal(
@@ -356,7 +432,15 @@ fn test_execute_conditional_combo_condition_met() {
     // sig1 now has avg_roi = 1000 bps (10%)
 
     let mut comps = Vec::new(&env);
+ feature/emergency-pause-circuit-breaker
     comps.push_back(ComponentSignal { signal_id: sig1, weight: 5000, condition: ConditionGate::None });
+
+    comps.push_back(ComponentSignal {
+        signal_id: sig1,
+        weight: 5000,
+        condition: None,
+    });
+  main
     comps.push_back(ComponentSignal {
         signal_id: sig2,
         weight: 5000,
@@ -402,7 +486,15 @@ fn test_execute_conditional_combo_condition_not_met() {
     // Condition: Success (roi > 0) → NOT met
 
     let mut comps = Vec::new(&env);
+ feature/emergency-pause-circuit-breaker
     comps.push_back(ComponentSignal { signal_id: sig1, weight: 5000, condition: ConditionGate::None });
+
+    comps.push_back(ComponentSignal {
+        signal_id: sig1,
+        weight: 5000,
+        condition: None,
+    });
+ main
     comps.push_back(ComponentSignal {
         signal_id: sig2,
         weight: 5000,
@@ -425,7 +517,7 @@ fn test_execute_conditional_combo_condition_not_met() {
 
     assert_eq!(executions.len(), 2);
     assert!(!executions.get(0).unwrap().skipped); // sig1 always runs
-    assert!(executions.get(1).unwrap().skipped);  // sig2 skipped — condition not met
+    assert!(executions.get(1).unwrap().skipped); // sig2 skipped — condition not met
 }
 
 #[test]
@@ -442,7 +534,15 @@ fn test_execute_conditional_roi_above_threshold() {
     client.record_trade_execution(&user, &sig1, &100_000, &105_000, &1_000_000);
 
     let mut comps = Vec::new(&env);
+ feature/emergency-pause-circuit-breaker
     comps.push_back(ComponentSignal { signal_id: sig1, weight: 5000, condition: ConditionGate::None });
+
+    comps.push_back(ComponentSignal {
+        signal_id: sig1,
+        weight: 5000,
+        condition: None,
+    });
+  main
     comps.push_back(ComponentSignal {
         signal_id: sig2,
         weight: 5000,
@@ -662,8 +762,17 @@ fn test_combo_execution_history_recorded() {
             &ComboType::Simultaneous,
         );
 
+ feature/emergency-pause-circuit-breaker
     client.execute_combo_signal(&combo_id, &user, &1_000_000);
     client.execute_combo_signal(&combo_id, &user, &2_000_000);
+
+    client
+        .execute_combo_signal(&combo_id, &user, &1_000_000)
+        .unwrap();
+    client
+        .execute_combo_signal(&combo_id, &user, &2_000_000)
+        .unwrap();
+ main
 
     let history = client.get_combo_executions(&combo_id);
     assert_eq!(history.len(), 2);
@@ -683,7 +792,7 @@ fn test_full_pairs_trade_workflow() {
     let user = Address::generate(&env);
 
     // Create a pairs trade: long XLM, short BTC (50/50)
-    let xlm_signal = make_signal(&env, &client, &provider);      // BUY XLM/USDC
+    let xlm_signal = make_signal(&env, &client, &provider); // BUY XLM/USDC
     let btc_signal = make_sell_signal(&env, &client, &provider); // SELL BTC/USDC
 
     let comps = two_component_50_50(&env, xlm_signal, btc_signal);

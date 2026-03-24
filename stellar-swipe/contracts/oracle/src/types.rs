@@ -1,7 +1,11 @@
+ feature/emergency-pause-circuit-breaker
 use soroban_sdk::{contracttype, Address, Vec, Env, Bytes, crypto::Ed25519Signature};
 use stellar_swipe_common::{AssetPair};
+
+ main
 use crate::errors::OracleError;
-    
+use common::AssetPair;
+use soroban_sdk::{contracttype, crypto::Ed25519Signature, Address, Env, Vec};
 
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -60,6 +64,10 @@ pub struct ExternalPrice {
     pub price: i128,
     pub timestamp: u64,
     pub round_id: u64,
+ feature/emergency-pause-circuit-breaker
     pub signature: Bytes, 
+
+    pub signature: Vec<u8>,
+ main
     pub oracle_address: Address,
 }
