@@ -2,6 +2,7 @@
 
 pub mod monitoring;
 pub mod governance;
+pub mod analytics;
 
 pub use monitoring::{
     ChainFinalityConfig, ChainId, MonitoredTransaction, MonitoringStatus, VerificationMethod,
@@ -22,4 +23,11 @@ pub use governance::{
     rotate_bridge_signers, add_signer, remove_signer,
     get_bridge_status, get_bridge_validators, get_governance_signers,
     get_required_signatures, is_signer, is_validator,
+};
+
+pub use analytics::{
+    BridgeAnalytics, ValidatorAnalytics, TimeSeries, DataPoint, TimeInterval,
+    VolumeStats, TimePeriod, AnalyticsMetric, Trend, TrendAnalysis,
+    get_bridge_analytics, get_validator_analytics, get_bridge_volume_stats,
+    calculate_bridge_health_score, compare_bridge_performance, analyze_volume_trend,
 };
