@@ -5,7 +5,9 @@
 
 #![allow(dead_code)]
 
-use soroban_sdk::{contracttype, String, Symbol, Vec, Env};
+use soroban_sdk::{contracttype, String, Symbol, Vec, Env, Address};
+use stellar_swipe_common::assets::Asset;
+use crate::analytics::{update_transfer_analytics, update_validator_analytics};
 
 /// Chain identifiers for multi-chain support
 #[contracttype]
@@ -67,13 +69,17 @@ pub struct MonitoredTransaction {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BridgeTransfer {
     pub transfer_id: u64,
+    pub bridge_id: u64,
     pub source_chain: ChainId,
     pub destination_chain: ChainId,
     pub amount: i128,
+    pub fee_paid: i128,
+    pub stellar_asset: Asset,
     pub user: String,
     pub status: TransferStatus,
     pub validator_signatures: Vec<String>,
     pub created_at: u64,
+    pub completed_at: Option<u64>,
 }
 
 /// Transfer status tracking
@@ -457,9 +463,12 @@ pub fn store_bridge_transfer(env: &Env, transfer: &BridgeTransfer) {
 pub fn create_bridge_transfer(
     env: &Env,
     transfer_id: u64,
+    bridge_id: u64,
     source_chain: ChainId,
     destination_chain: ChainId,
     amount: i128,
+    fee_paid: i128,
+    stellar_asset: Asset,
     user: String,
 ) -> Result<(), String> {
     if amount <= 0 {
@@ -468,13 +477,17 @@ pub fn create_bridge_transfer(
 
     let transfer = BridgeTransfer {
         transfer_id,
+        bridge_id,
         source_chain,
         destination_chain,
         amount,
+        fee_paid,
+        stellar_asset,
         user,
         status: TransferStatus::Pending,
         validator_signatures: Vec::new(env),
         created_at: env.ledger().timestamp(),
+        completed_at: None,
     };
 
     store_bridge_transfer(env, &transfer);
@@ -491,8 +504,11 @@ pub fn create_bridge_transfer(
 pub fn add_validator_signature(
     env: &Env,
     transfer_id: u64,
+    validator: Address,
     signature: String,
 ) -> Result<(), String> {
+    validator.require_auth();
+    
     let mut transfer = get_bridge_transfer(env, transfer_id)
         .ok_or_else(|| String::from_linear(env, "Transfer not found"))?;
 
@@ -511,6 +527,15 @@ pub fn add_validator_signature(
     }
 
     store_bridge_transfer(env, &transfer);
+
+    // Update validator analytics
+    update_validator_analytics(
+        env,
+        validator,
+        transfer.bridge_id,
+        env.ledger().timestamp(),
+        transfer.created_at,
+    )?;
 
     env.events().publish(
         (Symbol::new(env, "validator_signature_added"), transfer_id),
@@ -549,7 +574,11 @@ pub fn complete_transfer(env: &Env, transfer_id: u64) -> Result<(), String> {
         .ok_or_else(|| String::from_linear(env, "Transfer not found"))?;
 
     transfer.status = TransferStatus::Complete;
+    transfer.completed_at = Some(env.ledger().timestamp());
     store_bridge_transfer(env, &transfer);
+
+    // Update bridge analytics
+    update_transfer_analytics(env, transfer.bridge_id, &transfer)?;
 
     env.events().publish(
         (Symbol::new(env, "transfer_complete"), transfer_id),
@@ -765,12 +794,16 @@ mod tests {
         let env = setup_env();
         let user = String::from_linear(&env, "user123");
 
+        let asset = Asset { code: String::from_linear(&env, "XLM"), issuer: None };
         let result = create_bridge_transfer(
             &env,
             1,
+            1, // bridge_id
             ChainId::Ethereum,
             ChainId::Polygon,
             1000000,
+            100, // fee_paid
+            asset,
             user,
         );
 
@@ -787,26 +820,14 @@ mod tests {
     #[test]
     fn test_add_validator_signature() {
         let env = setup_env();
-        let user = String::from_linear(&env, "user123");
-
-        create_bridge_transfer(
-            &env,
-            1,
-            ChainId::Ethereum,
-            ChainId::Polygon,
-            1000000,
-            user,
-        ).unwrap();
-
-        let sig1 = String::from_linear(&env, "sig1");
-        let sig2 = String::from_linear(&env, "sig2");
-
-        add_validator_signature(&env, 1, sig1.clone()).unwrap();
+        let val1 = Address::generate(&env);
+        let val2 = Address::generate(&env);
+        add_validator_signature(&env, 1, val1, sig1.clone()).unwrap();
         let transfer = get_bridge_transfer(&env, 1).unwrap();
         assert_eq!(transfer.validator_signatures.len(), 1);
         assert_eq!(transfer.status, TransferStatus::Pending); // Not enough
 
-        add_validator_signature(&env, 1, sig2).unwrap();
+        add_validator_signature(&env, 1, val2, sig2).unwrap();
         let transfer = get_bridge_transfer(&env, 1).unwrap();
         assert_eq!(transfer.validator_signatures.len(), 2);
         assert_eq!(transfer.status, TransferStatus::ValidatorApproved);
@@ -817,19 +838,11 @@ mod tests {
         let env = setup_env();
         let user = String::from_linear(&env, "user123");
 
-        create_bridge_transfer(
-            &env,
-            1,
-            ChainId::Ethereum,
-            ChainId::Polygon,
-            1000000,
-            user,
-        ).unwrap();
-
         let sig = String::from_linear(&env, "sig1");
-        add_validator_signature(&env, 1, sig.clone()).unwrap();
+        let val = Address::generate(&env);
+        add_validator_signature(&env, 1, val.clone(), sig.clone()).unwrap();
 
-        let result = add_validator_signature(&env, 1, sig);
+        let result = add_validator_signature(&env, 1, val, sig);
         assert!(result.is_err());
     }
 
@@ -854,8 +867,10 @@ mod tests {
         // Add signatures
         let sig1 = String::from_linear(&env, "sig1");
         let sig2 = String::from_linear(&env, "sig2");
-        add_validator_signature(&env, 1, sig1).unwrap();
-        add_validator_signature(&env, 1, sig2).unwrap();
+        let val1 = Address::generate(&env);
+        let val2 = Address::generate(&env);
+        add_validator_signature(&env, 1, val1, sig1).unwrap();
+        add_validator_signature(&env, 1, val2, sig2).unwrap();
 
         // Now approve should succeed
         let result = approve_transfer_for_minting(&env, 1);
@@ -909,12 +924,16 @@ mod tests {
         let env = setup_env();
         let user = String::from_linear(&env, "user123");
 
+        let asset = Asset { code: String::from_linear(&env, "XLM"), issuer: None };
         let result = create_bridge_transfer(
             &env,
+            1,
             1,
             ChainId::Ethereum,
             ChainId::Polygon,
             0,  // Invalid amount
+            0,
+            asset,
             user,
         );
 
@@ -977,13 +996,17 @@ mod tests {
         let user = String::from_linear(&env, "user123");
         let tx_hash = String::from_linear(&env, "0xabcd1234");
 
+        let asset = Asset { code: String::from_linear(&env, "XLM"), issuer: None };
         // Step 1: Create transfer
         create_bridge_transfer(
             &env,
             1,
+            1,
             ChainId::Ethereum,
             ChainId::Polygon,
             1000000,
+            100,
+            asset,
             user,
         ).unwrap();
 
@@ -994,8 +1017,10 @@ mod tests {
         update_transaction_confirmation_count(&env, 1, 132).unwrap();
 
         // Step 4: Add validator signatures
-        add_validator_signature(&env, 1, String::from_linear(&env, "sig1")).unwrap();
-        add_validator_signature(&env, 1, String::from_linear(&env, "sig2")).unwrap();
+        let val1 = Address::generate(&env);
+        let val2 = Address::generate(&env);
+        add_validator_signature(&env, 1, val1, String::from_linear(&env, "sig1")).unwrap();
+        add_validator_signature(&env, 1, val2, String::from_linear(&env, "sig2")).unwrap();
 
         // Step 5: Approve for minting
         approve_transfer_for_minting(&env, 1).unwrap();
