@@ -2,7 +2,7 @@ use crate::types::Asset;
  feature/cross-chain-sync
 use soroban_sdk::{Address, Env, Symbol, Vec};
 
-use soroban_sdk::{Address, Env, Symbol, String, Vec};
+use soroban_sdk::{Address, Env, Symbol, String, Vec, contracttype};
  main
 
 pub fn emit_admin_transferred(env: &Env, old_admin: Address, new_admin: Address) {
@@ -60,9 +60,28 @@ pub fn emit_fee_collected(
         .publish(topics, (total_fee, platform_fee, provider_fee));
 }
 
-pub fn emit_signal_expired(env: &Env, signal_id: u64, provider: Address, expiry_time: u64) {
+#[contracttype]
+#[derive(Clone)]
+pub struct SignalAdoptedEvent {
+    pub signal_id: u64,
+    pub adopter: Address,
+    pub new_count: u32,
+}
+
+/// Emitted when signal adoption counter increments (Issue #169)
+pub fn emit_signal_adopted(
+    env: &Env,
+    signal_id: u64,
+    adopter: Address,
+    new_count: u32,
+) {
+    let topics = (Symbol::new(env, "signal_adopted"), signal_id);
+    env.events().publish(topics, SignalAdoptedEvent { signal_id, adopter, new_count });
+}
+
+pub fn emit_signal_expired(env: &Env, signal_id: u64, provider: Address, expired_at_ledger: u64) {
     let topics = (Symbol::new(env, "signal_expired"), provider, signal_id);
-    env.events().publish(topics, expiry_time);
+    env.events().publish(topics, expired_at_ledger);
 }
 
 pub fn emit_trade_executed(env: &Env, signal_id: u64, executor: Address, roi: i128, volume: i128) {
