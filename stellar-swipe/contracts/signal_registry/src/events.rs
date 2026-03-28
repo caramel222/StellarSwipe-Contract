@@ -1,8 +1,12 @@
 use crate::types::Asset;
+ main
  feature/cross-chain-sync
 use soroban_sdk::{Address, Env, Symbol, Vec};
 
 use soroban_sdk::{Address, Env, Symbol, String, Vec, contracttype};
+ main
+
+use soroban_sdk::{Address, Env, String, Symbol, Vec};
  main
 
 pub fn emit_admin_transferred(env: &Env, old_admin: Address, new_admin: Address) {
@@ -179,7 +183,6 @@ pub fn emit_copy_recorded(env: &Env, user: Address, signal_id: u64, version: u32
     let topics = (Symbol::new(env, "copy_recorded"), signal_id, user);
     env.events().publish(topics, version);
 }
- feature/cross-chain-sync
 
 pub fn emit_cross_chain_signal_requested(
     env: &Env,
@@ -221,8 +224,6 @@ pub fn emit_cross_chain_signal_synced(
     env.events().publish(topics, new_status);
 }
 
- feature/emergency-pause-circuit-breaker
-
 pub fn emit_emergency_paused(env: &Env, category: String, paused_by: Address, reason: String, auto_unpause_at: Option<u64>) {
     let topics = (Symbol::new(env, "emergency_paused"), category, paused_by);
     env.events().publish(topics, (reason, auto_unpause_at));
@@ -237,6 +238,19 @@ pub fn emit_circuit_breaker_triggered(env: &Env, category: String, reason: Strin
     let topics = (Symbol::new(env, "circuit_breaker_triggered"), category);
     env.events().publish(topics, reason);
 }
+ docs/contract-events-documentation
 
+
+pub fn emit_guardian_set(env: &Env, guardian: Address) {
+    let topics = (Symbol::new(env, "guardian_set"),);
+    env.events().publish(topics, guardian);
+}
+
+pub fn emit_guardian_revoked(env: &Env, guardian: Address) {
+    let topics = (Symbol::new(env, "guardian_revoked"),);
+    env.events().publish(topics, guardian);
+}
+
+ main
  main
  main
