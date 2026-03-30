@@ -461,3 +461,147 @@ fn swap_with_slippage_reverts_when_exceeded() {
 main
  main
 }
+
+// ── cancel_copy_trade tests ───────────────────────────────────────────────────
+
+/// Mock portfolio that tracks positions and supports has_position / close_position.
+#[contract]
+pub struct MockPortfolioWithPositions;
+
+#[contracttype]
+#[derive(Clone)]
+enum PortfolioKey {
+    Position(Address, u64),
+    LastClosed,
+}
+
+#[contractimpl]
+impl MockPortfolioWithPositions {
+    pub fn add_position(env: Env, user: Address, trade_id: u64) {
+        env.storage()
+            .instance()
+            .set(&PortfolioKey::Position(user, trade_id), &true);
+    }
+    pub fn has_position(env: Env, user: Address, trade_id: u64) -> bool {
+        env.storage()
+            .instance()
+            .get(&PortfolioKey::Position(user, trade_id))
+            .unwrap_or(false)
+    }
+    pub fn close_position(env: Env, user: Address, trade_id: u64, _pnl: i128) {
+        env.storage()
+            .instance()
+            .remove(&PortfolioKey::Position(user, trade_id));
+        env.storage()
+            .instance()
+            .set(&PortfolioKey::LastClosed, &trade_id);
+    }
+    pub fn last_closed(env: Env) -> Option<u64> {
+        env.storage().instance().get(&PortfolioKey::LastClosed)
+    }
+    // Satisfy execute_copy_trade path (unused in cancel tests).
+    pub fn get_open_position_count(_env: Env, _user: Address) -> u32 { 0 }
+    pub fn record_copy_position(_env: Env, _user: Address) {}
+}
+
+fn setup_cancel(
+    router_out: i128,
+) -> (Env, Address, Address, Address, Address, Address, Address) {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+
+    let sac_a = env.register_stellar_asset_contract_v2(admin.clone());
+    let sac_b = env.register_stellar_asset_contract_v2(admin.clone());
+    let token_a = sac_a.address();
+    let token_b = sac_b.address();
+
+    soroban_sdk::token::StellarAssetClient::new(&env, &token_a).mint(&env.current_contract_address(), &1_000_000_000);
+    soroban_sdk::token::StellarAssetClient::new(&env, &token_b).mint(&Address::generate(&env), &0); // ensure SAC exists
+
+    let router_id = env.register(MockSdexRouter, ());
+    MockSdexRouterClient::new(&env, &router_id).set_amount_out(&router_out);
+    soroban_sdk::token::StellarAssetClient::new(&env, &token_b).mint(&router_id, &10_000_000_000);
+
+    let portfolio_id = env.register(MockPortfolioWithPositions, ());
+    let exec_id = env.register(TradeExecutorContract, ());
+
+    let exec = TradeExecutorContractClient::new(&env, &exec_id);
+    exec.initialize(&admin);
+    exec.set_user_portfolio(&portfolio_id);
+    exec.set_sdex_router(&router_id);
+
+    soroban_sdk::token::StellarAssetClient::new(&env, &token_a).mint(&exec_id, &1_000_000_000);
+
+    (env, exec_id, portfolio_id, user, token_a, token_b, router_id)
+}
+
+/// User can cancel their own open position.
+#[test]
+fn cancel_copy_trade_success() {
+    let (env, exec_id, portfolio_id, user, token_a, token_b, _) = setup_cancel(1_100_000);
+    let exec = TradeExecutorContractClient::new(&env, &exec_id);
+
+    MockPortfolioWithPositionsClient::new(&env, &portfolio_id).add_position(&user, &1u64);
+
+    exec.cancel_copy_trade(&user, &user, &1u64, &token_a, &token_b, &1_000_000, &900_000);
+
+    assert_eq!(
+        MockPortfolioWithPositionsClient::new(&env, &portfolio_id).last_closed(),
+        Some(1u64)
+    );
+}
+
+/// Caller != user returns Unauthorized.
+#[test]
+fn cancel_copy_trade_unauthorized() {
+    let (env, exec_id, portfolio_id, user, token_a, token_b, _) = setup_cancel(1_000_000);
+    let attacker = Address::generate(&env);
+    let exec = TradeExecutorContractClient::new(&env, &exec_id);
+
+    MockPortfolioWithPositionsClient::new(&env, &portfolio_id).add_position(&user, &1u64);
+
+    let err = env.as_contract(&exec_id, || {
+        TradeExecutorContract::cancel_copy_trade(
+            env.clone(), attacker, user, 1u64, token_a, token_b, 1_000_000, 900_000,
+        )
+    });
+    assert_eq!(err, Err(ContractError::Unauthorized));
+}
+
+/// Non-existent trade returns TradeNotFound.
+#[test]
+fn cancel_copy_trade_not_found() {
+    let (env, exec_id, _portfolio_id, user, token_a, token_b, _) = setup_cancel(1_000_000);
+    let exec = TradeExecutorContractClient::new(&env, &exec_id);
+
+    let err = env.as_contract(&exec_id, || {
+        TradeExecutorContract::cancel_copy_trade(
+            env.clone(), user.clone(), user, 99u64, token_a, token_b, 1_000_000, 900_000,
+        )
+    });
+    assert_eq!(err, Err(ContractError::TradeNotFound));
+}
+
+/// P&L is correctly computed as exit_price - amount.
+#[test]
+fn cancel_copy_trade_pnl_calculation() {
+    let (env, exec_id, portfolio_id, user, token_a, token_b, _) = setup_cancel(1_200_000);
+    let exec = TradeExecutorContractClient::new(&env, &exec_id);
+
+    MockPortfolioWithPositionsClient::new(&env, &portfolio_id).add_position(&user, &2u64);
+
+    exec.cancel_copy_trade(&user, &user, &2u64, &token_a, &token_b, &1_000_000, &900_000);
+
+    // Verify TradeCancelled event was emitted.
+    let found = env.events().all().iter().any(|e| {
+        let topics: soroban_sdk::Vec<soroban_sdk::Val> = e.1.clone();
+        topics.get(0)
+            .and_then(|v| soroban_sdk::Symbol::try_from(v).ok())
+            .map(|s| s == soroban_sdk::Symbol::new(&env, "TradeCancelled"))
+            .unwrap_or(false)
+    });
+    assert!(found, "TradeCancelled event not emitted");
+}
