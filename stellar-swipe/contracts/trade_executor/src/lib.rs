@@ -1,22 +1,20 @@
 #![no_std]
 
 mod errors;
-pub mod triggers;
- feature/copy-trade-balance-check
+pub mod keeper;
 pub mod risk_gates;
+pub mod sdex;
+pub mod triggers;
+pub mod wire;
 
 use errors::{ContractError, InsufficientBalanceDetail};
-use risk_gates::{
-    check_position_limit, check_user_balance, DEFAULT_ESTIMATED_COPY_TRADE_FEE,
-};
+use risk_gates::{check_position_limit, check_user_balance, DEFAULT_ESTIMATED_COPY_TRADE_FEE};
+use sdex::{execute_sdex_swap, min_received_from_slippage};
+use wire::{TradeOrder, TradeStatus, TRADE_TIMEOUT_LEDGERS};
 
-feature/position-limit-copy-trade
-pub mod risk_gates;
-
-use errors::ContractError;
-use risk_gates::check_position_limit;
- main
 use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, IntoVal, Symbol, Val, Vec};
+
+use keeper::{TriggerablePosition, compute_keeper_reward, get_triggerable_positions, register_watch};
 
 /// Instance storage keys.
 #[contracttype]
@@ -27,32 +25,30 @@ pub enum StorageKey {
     UserPortfolio,
     /// When set to `true`, this user bypasses [`risk_gates::MAX_POSITIONS_PER_USER`].
     PositionLimitExempt(Address),
- feature/take-profit-trigger
-    /// Oracle contract used by stop-loss/take-profit triggers (`get_price(asset_pair) -> i128`).
+    /// Pending limit order by trade_id.
+    TradeOrder(u64),
+    /// Oracle contract used by stop-loss/take-profit triggers.
     Oracle,
-    /// Portfolio contract used by stop-loss/take-profit close calls (`close_position(user, trade_id, pnl)`).
-
-    /// Oracle contract used by stop-loss trigger (`get_price(asset_pair) -> i128`).
-    Oracle,
-    /// Portfolio contract used by stop-loss trigger (`close_position(user, trade_id, pnl)`).
- main
+    /// Portfolio contract used by stop-loss/take-profit close calls.
     StopLossPortfolio,
- feature/copy-trade-balance-check
-    /// Overrides default estimated fee used in balance checks (`None` = use default constant).
+    /// Overrides default estimated fee used in balance checks.
     CopyTradeEstimatedFee,
-    /// Last balance shortfall for `user` (cleared after a successful `execute_copy_trade`).
+    /// Last balance shortfall for `user`.
     LastInsufficientBalance(Address),
-
- main
+    /// SDEX router contract address.
+    SdexRouter,
+    /// SAC token used to pay keeper rewards.
+    KeeperRewardToken,
+    /// Accumulated reward balance owed to a keeper address.
+    KeeperReward(Address),
 }
 
-/// Symbol invoked on the portfolio after a successful limit check (test / integration hook).
+/// Symbol invoked on the portfolio after a successful limit check.
 pub const RECORD_COPY_POSITION_FN: &str = "record_copy_position";
 
 /// Temporary-storage key for the reentrancy lock on `execute_copy_trade`.
 const EXECUTION_LOCK: &str = "ExecLock";
 
- feature/copy-trade-balance-check
 #[contract]
 pub struct TradeExecutorContract;
 
@@ -65,34 +61,7 @@ fn effective_estimated_fee(env: &Env) -> i128 {
 
 #[contractimpl]
 impl TradeExecutorContract {
-
-
-
-pub mod sdex;
-
-use errors::ContractError;
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Env};
-
-use sdex::{execute_sdex_swap, min_received_from_slippage};
-
-#[contracttype]
-#[derive(Clone)]
-enum StorageKey {
-    Admin,
-    SdexRouter,
-}
-
- main
-#[contract]
-pub struct TradeExecutorContract;
-
-#[contractimpl]
-impl TradeExecutorContract {
-  feature/position-limit-copy-trade
-
-    /// One-time init; stores admin who may configure the SDEX router address.
-main
-main
+    /// One-time init; stores admin.
     pub fn initialize(env: Env, admin: Address) {
         if env.storage().instance().has(&StorageKey::Admin) {
             panic!("already initialized");
@@ -100,11 +69,8 @@ main
         env.storage().instance().set(&StorageKey::Admin, &admin);
     }
 
- feature/copy-trade-balance-check
+    // ── Portfolio configuration ───────────────────────────────────────────────
 
- feature/position-limit-copy-trade
- main
-    /// Configure the portfolio contract used for open-position counts and copy-trade recording.
     pub fn set_user_portfolio(env: Env, portfolio: Address) {
         let admin: Address = env
             .storage()
@@ -121,8 +87,8 @@ main
         env.storage().instance().get(&StorageKey::UserPortfolio)
     }
 
- feature/copy-trade-balance-check
-    /// Set the fee term used in `amount + estimated_fee` balance checks (admin). Use `0` for no fee cushion.
+    // ── Fee configuration ─────────────────────────────────────────────────────
+
     pub fn set_copy_trade_estimated_fee(env: Env, fee: i128) {
         let admin: Address = env
             .storage()
@@ -142,26 +108,15 @@ main
         effective_estimated_fee(&env)
     }
 
-    /// Admin override: exempt `user` from the per-user position cap (or clear exemption).
-    pub fn set_position_limit_exempt(env: Env, user: Address, exempt: bool) {
+    // ── Position limit exemption ──────────────────────────────────────────────
 
-    /// Admin override: exempt `user` from the per-user position cap (or clear exemption).
     pub fn set_position_limit_exempt(env: Env, user: Address, exempt: bool) {
-
-    /// Set the router contract invoked by [`sdex::execute_sdex_swap`].
-    pub fn set_sdex_router(env: Env, router: Address) {
- main
-main
         let admin: Address = env
             .storage()
             .instance()
             .get(&StorageKey::Admin)
             .expect("not initialized");
         admin.require_auth();
-feature/copy-trade-balance-check
-
-feature/position-limit-copy-trade
-main
         let key = StorageKey::PositionLimitExempt(user);
         if exempt {
             env.storage().instance().set(&key, &true);
@@ -175,15 +130,8 @@ main
         env.storage().instance().get(&key).unwrap_or(false)
     }
 
- feature/take-profit-trigger
     // ── Stop-loss / take-profit configuration ─────────────────────────────────
 
-    /// Set the oracle contract used by stop-loss/take-profit checks (admin only).
-
-    // ── Stop-loss configuration ───────────────────────────────────────────────
-
-    /// Set the oracle contract used by stop-loss checks (admin only).
- main
     pub fn set_oracle(env: Env, oracle: Address) {
         let admin: Address = env
             .storage()
@@ -196,11 +144,6 @@ main
             .set(&Symbol::new(&env, triggers::ORACLE_KEY), &oracle);
     }
 
- feature/take-profit-trigger
-    /// Set the portfolio contract used by stop-loss/take-profit close calls (admin only).
-
-    /// Set the portfolio contract used by stop-loss close calls (admin only).
- main
     pub fn set_stop_loss_portfolio(env: Env, portfolio: Address) {
         let admin: Address = env
             .storage()
@@ -213,22 +156,23 @@ main
             .set(&Symbol::new(&env, triggers::PORTFOLIO_KEY), &portfolio);
     }
 
- feature/take-profit-trigger
-    /// Register a stop-loss price for `(user, trade_id)`.
-
-    /// Register a stop-loss price for `(user, trade_id)`.  Callable by the user or a keeper.
- main
     pub fn set_stop_loss_price(env: Env, user: Address, trade_id: u64, stop_loss_price: i128) {
         user.require_auth();
         triggers::set_stop_loss(&env, &user, trade_id, stop_loss_price);
     }
 
- feature/take-profit-trigger
-    /// Check oracle price and trigger stop-loss if breached. Returns `true` when triggered.
+    pub fn set_stop_loss_price_with_pair(
+        env: Env,
+        user: Address,
+        trade_id: u64,
+        stop_loss_price: i128,
+        asset_pair: u32,
+    ) {
+        user.require_auth();
+        triggers::set_stop_loss(&env, &user, trade_id, stop_loss_price);
+        register_watch(&env, &user, trade_id, asset_pair);
+    }
 
-    /// Check oracle price and trigger stop-loss if breached.  Returns `true` when triggered.
-    /// Callable by an off-chain keeper or on-chain oracle callback.
- main
     pub fn check_and_trigger_stop_loss(
         env: Env,
         user: Address,
@@ -238,15 +182,23 @@ main
         triggers::check_and_trigger_stop_loss(&env, user, trade_id, asset_pair)
     }
 
- feature/take-profit-trigger
-    /// Register a take-profit price for `(user, trade_id)`.
     pub fn set_take_profit_price(env: Env, user: Address, trade_id: u64, take_profit_price: i128) {
         user.require_auth();
         triggers::set_take_profit(&env, &user, trade_id, take_profit_price);
     }
 
-    /// Check oracle price and trigger take-profit if breached. Returns `true` when triggered.
-    /// Stop-loss takes priority if both would trigger simultaneously.
+    pub fn set_take_profit_price_with_pair(
+        env: Env,
+        user: Address,
+        trade_id: u64,
+        take_profit_price: i128,
+        asset_pair: u32,
+    ) {
+        user.require_auth();
+        triggers::set_take_profit(&env, &user, trade_id, take_profit_price);
+        register_watch(&env, &user, trade_id, asset_pair);
+    }
+
     pub fn check_and_trigger_take_profit(
         env: Env,
         user: Address,
@@ -256,10 +208,8 @@ main
         triggers::check_and_trigger_take_profit(&env, user, trade_id, asset_pair)
     }
 
+    // ── Copy trade ────────────────────────────────────────────────────────────
 
- main
-feature/copy-trade-balance-check
-    /// Structured shortfall after the last `InsufficientBalance` from [`Self::execute_copy_trade`].
     pub fn get_insufficient_balance_detail(
         env: Env,
         user: Address,
@@ -268,7 +218,8 @@ feature/copy-trade-balance-check
         env.storage().instance().get(&key)
     }
 
-    /// Runs copy trade: balance check (incl. fee), position limit, then portfolio `record_copy_position`.
+    /// Runs copy trade: balance check (incl. fee), position limit, then portfolio
+    /// `record_copy_position`.
     pub fn execute_copy_trade(
         env: Env,
         user: Address,
@@ -281,14 +232,13 @@ feature/copy-trade-balance-check
             return Err(ContractError::InvalidAmount);
         }
 
-
-    /// Runs copy trade: position limit check first, then portfolio `record_copy_position`.
-    pub fn execute_copy_trade(env: Env, user: Address) -> Result<(), ContractError> {
-        user.require_auth();
-
-main
         let lock_key = Symbol::new(&env, EXECUTION_LOCK);
-        if env.storage().temporary().get::<_, bool>(&lock_key).unwrap_or(false) {
+        if env
+            .storage()
+            .temporary()
+            .get::<_, bool>(&lock_key)
+            .unwrap_or(false)
+        {
             return Err(ContractError::ReentrancyDetected);
         }
         env.storage().temporary().set(&lock_key, &true);
@@ -299,7 +249,6 @@ main
             .get(&StorageKey::UserPortfolio)
             .ok_or(ContractError::NotInitialized)?;
 
-feature/copy-trade-balance-check
         let fee = effective_estimated_fee(&env);
         let bal_key = StorageKey::LastInsufficientBalance(user.clone());
         match check_user_balance(&env, &user, &token, amount, fee) {
@@ -312,8 +261,6 @@ feature/copy-trade-balance-check
             }
         }
 
-
-main
         let exempt = {
             let key = StorageKey::PositionLimitExempt(user.clone());
             env.storage().instance().get(&key).unwrap_or(false)
@@ -326,20 +273,30 @@ main
         args.push_back(user.into_val(&env));
         env.invoke_contract::<()>(&portfolio, &sym, args);
 
-        env.storage().temporary().remove(&Symbol::new(&env, EXECUTION_LOCK));
+        env.storage()
+            .temporary()
+            .remove(&Symbol::new(&env, EXECUTION_LOCK));
         Ok(())
-feature/copy-trade-balance-check
-
-
-        env.storage().instance().set(&StorageKey::SdexRouter, &router);
     }
 
-    /// Read configured router (for off-chain tooling).
+    // ── SDEX router configuration ─────────────────────────────────────────────
+
+    pub fn set_sdex_router(env: Env, router: Address) {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&StorageKey::Admin)
+            .expect("not initialized");
+        admin.require_auth();
+        env.storage()
+            .instance()
+            .set(&StorageKey::SdexRouter, &router);
+    }
+
     pub fn get_sdex_router(env: Env) -> Option<Address> {
         env.storage().instance().get(&StorageKey::SdexRouter)
     }
 
-    /// Swap using a caller-supplied minimum output (already includes slippage tolerance).
     pub fn swap(
         env: Env,
         from_token: Address,
@@ -352,17 +309,9 @@ feature/copy-trade-balance-check
             .instance()
             .get(&StorageKey::SdexRouter)
             .ok_or(ContractError::NotInitialized)?;
-        execute_sdex_swap(
-            &env,
-            &router,
-            &from_token,
-            &to_token,
-            amount,
-            min_received,
-        )
+        execute_sdex_swap(&env, &router, &from_token, &to_token, amount, min_received)
     }
 
-    /// Swap with `min_received = amount * (10000 - max_slippage_bps) / 10000`.
     pub fn swap_with_slippage(
         env: Env,
         from_token: Address,
@@ -370,20 +319,128 @@ feature/copy-trade-balance-check
         amount: i128,
         max_slippage_bps: u32,
     ) -> Result<i128, ContractError> {
-        let min_received =
-            min_received_from_slippage(amount, max_slippage_bps).ok_or(ContractError::InvalidAmount)?;
+        let min_received = min_received_from_slippage(amount, max_slippage_bps)
+            .ok_or(ContractError::InvalidAmount)?;
         Self::swap(env, from_token, to_token, amount, min_received)
-main
- main
+    }
+
+    // ── Keeper network interface ──────────────────────────────────────────────
+
+    /// Configure the SAC token used to pay keeper rewards (admin only).
+    pub fn set_keeper_reward_token(env: Env, token: Address) {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&StorageKey::Admin)
+            .expect("not initialized");
+        admin.require_auth();
+        env.storage()
+            .instance()
+            .set(&StorageKey::KeeperRewardToken, &token);
+    }
+
+    /// Return all positions whose oracle price has already crossed their trigger
+    /// threshold.  Callable by any keeper — no auth required.
+    pub fn get_triggerable_positions(env: Env) -> Vec<TriggerablePosition> {
+        get_triggerable_positions(&env).unwrap_or_else(|_| Vec::new(&env))
+    }
+
+    /// Accrue a keeper reward for `position_value` to `keeper`.
+    /// Called internally after a successful trigger; emits `KeeperRewarded`.
+    /// The reward is stored on-chain and can be claimed via `claim_keeper_reward`.
+    pub fn accrue_keeper_reward(env: Env, keeper: Address, position_value: i128) {
+        let reward = compute_keeper_reward(position_value);
+        if reward == 0 {
+            return;
+        }
+        let key = StorageKey::KeeperReward(keeper.clone());
+        let current: i128 = env.storage().instance().get(&key).unwrap_or(0);
+        let new_total = current.checked_add(reward).unwrap_or(current);
+        env.storage().instance().set(&key, &new_total);
+        env.events().publish(
+            (Symbol::new(&env, "KeeperRewarded"), keeper.clone()),
+            (reward, new_total),
+        );
+    }
+
+    /// Return the accrued (unclaimed) reward balance for `keeper`.
+    pub fn get_keeper_reward(env: Env, keeper: Address) -> i128 {
+        env.storage()
+            .instance()
+            .get(&StorageKey::KeeperReward(keeper))
+            .unwrap_or(0)
+    }
+
+    // ── Trade timeout ─────────────────────────────────────────────────────────
+
+    /// Place a pending limit order with an automatic expiry of `TRADE_TIMEOUT_LEDGERS`.
+    /// Callable by the user; stores the order in persistent storage.
+    pub fn place_trade(
+        env: Env,
+        user: Address,
+        trade_id: u64,
+        amount: i128,
+    ) -> Result<(), ContractError> {
+        user.require_auth();
+        if amount <= 0 {
+            return Err(ContractError::InvalidAmount);
+        }
+        let expires_at_ledger = env
+            .ledger()
+            .sequence()
+            .checked_add(TRADE_TIMEOUT_LEDGERS)
+            .ok_or(ContractError::InvalidAmount)?;
+        let order = TradeOrder {
+            trade_id,
+            user,
+            amount,
+            expires_at_ledger,
+            status: TradeStatus::Pending,
+        };
+        env.storage()
+            .persistent()
+            .set(&StorageKey::TradeOrder(trade_id), &order);
+        Ok(())
+    }
+
+    /// Expire an unfilled trade whose timeout has elapsed. Callable by any keeper (no user auth).
+    /// Removes the locked order and emits `TradeExpired { trade_id, user, amount_returned }`.
+    ///
+    /// Errors:
+    /// - `TradeNotFound`      — no order with this `trade_id`
+    /// - `TradeAlreadyFilled` — order status is `Filled`
+    /// - `TradeNotExpired`    — timeout has not yet elapsed
+    pub fn expire_trade(env: Env, trade_id: u64) -> Result<(), ContractError> {
+        let order: TradeOrder = env
+            .storage()
+            .persistent()
+            .get(&StorageKey::TradeOrder(trade_id))
+            .ok_or(ContractError::TradeNotFound)?;
+
+        if order.status == TradeStatus::Filled {
+            return Err(ContractError::TradeAlreadyFilled);
+        }
+
+        if env.ledger().sequence() <= order.expires_at_ledger {
+            return Err(ContractError::TradeNotExpired);
+        }
+
+        env.storage()
+            .persistent()
+            .remove(&StorageKey::TradeOrder(trade_id));
+
+        env.events().publish(
+            (Symbol::new(&env, "TradeExpired"), order.user.clone()),
+            (trade_id, order.user.clone(), order.amount),
+        );
+
+        Ok(())
     }
 
     // ── Manual position exit ──────────────────────────────────────────────────
 
     /// Cancel a copy trade manually: executes a SDEX swap to close the position,
     /// records exit in UserPortfolio, and emits `TradeCancelled`.
-    ///
-    /// Returns `Unauthorized` if `caller != user`, `TradeNotFound` if the position
-    /// does not exist. If the SDEX swap fails the position remains open.
     pub fn cancel_copy_trade(
         env: Env,
         caller: Address,
@@ -405,7 +462,6 @@ main
             .get(&StorageKey::UserPortfolio)
             .ok_or(ContractError::NotInitialized)?;
 
-        // Verify the position exists for this user.
         let exists: bool = {
             let sym = Symbol::new(&env, "has_position");
             let mut args = Vec::<Val>::new(&env);
@@ -423,10 +479,9 @@ main
             .get(&StorageKey::SdexRouter)
             .ok_or(ContractError::NotInitialized)?;
 
-        // Execute SDEX swap to close the position. If this fails, position stays open.
-        let exit_price = execute_sdex_swap(&env, &router, &from_token, &to_token, amount, min_received)?;
+        let exit_price =
+            execute_sdex_swap(&env, &router, &from_token, &to_token, amount, min_received)?;
 
-        // Compute realized P&L and close position in UserPortfolio.
         let realized_pnl = exit_price - amount;
         let close_sym = Symbol::new(&env, "close_position");
         let mut close_args = Vec::<Val>::new(&env);
