@@ -68,6 +68,8 @@ pub fn check_and_trigger_stop_loss(
     asset_pair: u32,
 ) -> Result<bool, ContractError> {
     let (oracle, portfolio) = fetch_oracle_and_portfolio(env)?;
+    let stop_loss_price =
+        get_stop_loss(env, &user, trade_id).ok_or(ContractError::NotInitialized)?;
 
     let stop_loss_price: i128 = get_stop_loss(env, &user, trade_id)
         .ok_or(ContractError::NotInitialized)?;
@@ -139,8 +141,11 @@ mod tests {
     #[contractimpl]
     impl MockOracle {
         pub fn set_price(env: Env, price: i128) {
-            env.storage().instance().set(&symbol_short!("price"), &price);
+            env.storage()
+                .instance()
+                .set(&symbol_short!("price"), &price);
         }
+
         pub fn get_price(env: Env, _asset_pair: u32) -> i128 {
             env.storage()
                 .instance()
@@ -159,6 +164,7 @@ mod tests {
                 .instance()
                 .set(&symbol_short!("closed"), &trade_id);
         }
+
         pub fn last_closed(env: Env) -> Option<u64> {
             env.storage().instance().get(&symbol_short!("closed"))
         }
@@ -178,12 +184,12 @@ mod tests {
         exec.set_oracle(&oracle_id);
         exec.set_stop_loss_portfolio(&portfolio_id);
 
-        (env, exec_id, oracle_id, portfolio_id, admin)
+        (env, exec_id, oracle_id, portfolio_id)
     }
 
     #[test]
     fn no_trigger_when_price_above_stop_loss() {
-        let (env, exec_id, oracle_id, portfolio_id, _) = setup();
+        let (env, exec_id, oracle_id, portfolio_id) = setup();
         let user = Address::generate(&env);
         MockOracleClient::new(&env, &oracle_id).set_price(&200);
         let exec = TradeExecutorContractClient::new(&env, &exec_id);
@@ -196,7 +202,7 @@ mod tests {
 
     #[test]
     fn trigger_when_price_at_stop_loss() {
-        let (env, exec_id, oracle_id, portfolio_id, _) = setup();
+        let (env, exec_id, oracle_id, portfolio_id) = setup();
         let user = Address::generate(&env);
         MockOracleClient::new(&env, &oracle_id).set_price(&100);
         let exec = TradeExecutorContractClient::new(&env, &exec_id);
@@ -210,11 +216,12 @@ mod tests {
 
     #[test]
     fn trigger_when_price_below_stop_loss() {
-        let (env, exec_id, oracle_id, portfolio_id, _) = setup();
+        let (env, exec_id, oracle_id, portfolio_id) = setup();
         let user = Address::generate(&env);
         MockOracleClient::new(&env, &oracle_id).set_price(&50);
         let exec = TradeExecutorContractClient::new(&env, &exec_id);
         exec.set_stop_loss_price(&user, &2u64, &100);
+
         assert!(exec.check_and_trigger_stop_loss(&user, &2u64, &0u32));
         assert_eq!(
             MockPortfolioClient::new(&env, &portfolio_id).last_closed(),
@@ -224,11 +231,13 @@ mod tests {
 
     #[test]
     fn stop_loss_trigger_emits_event() {
-        let (env, exec_id, oracle_id, _, _) = setup();
+        let (env, exec_id, oracle_id, _) = setup();
         let user = Address::generate(&env);
+
         MockOracleClient::new(&env, &oracle_id).set_price(&80);
         let exec = TradeExecutorContractClient::new(&env, &exec_id);
         exec.set_stop_loss_price(&user, &3u64, &100);
+
         exec.check_and_trigger_stop_loss(&user, &3u64, &0u32);
         let found = env.events().all().iter().any(|e| {
             let topics: soroban_sdk::Vec<soroban_sdk::Val> = e.1.clone();
@@ -240,11 +249,13 @@ mod tests {
 
     #[test]
     fn no_trigger_when_price_below_take_profit() {
-        let (env, exec_id, oracle_id, portfolio_id, _) = setup();
+        let (env, exec_id, oracle_id, portfolio_id) = setup();
         let user = Address::generate(&env);
+
         MockOracleClient::new(&env, &oracle_id).set_price(&150);
         let exec = TradeExecutorContractClient::new(&env, &exec_id);
         exec.set_take_profit_price(&user, &1u64, &200);
+
         assert!(!exec.check_and_trigger_take_profit(&user, &1u64, &0u32));
         assert!(MockPortfolioClient::new(&env, &portfolio_id)
             .last_closed()
@@ -253,11 +264,13 @@ mod tests {
 
     #[test]
     fn trigger_when_price_at_take_profit() {
-        let (env, exec_id, oracle_id, portfolio_id, _) = setup();
+        let (env, exec_id, oracle_id, portfolio_id) = setup();
         let user = Address::generate(&env);
+
         MockOracleClient::new(&env, &oracle_id).set_price(&200);
         let exec = TradeExecutorContractClient::new(&env, &exec_id);
         exec.set_take_profit_price(&user, &1u64, &200);
+
         assert!(exec.check_and_trigger_take_profit(&user, &1u64, &0u32));
         assert_eq!(
             MockPortfolioClient::new(&env, &portfolio_id).last_closed(),
@@ -267,11 +280,13 @@ mod tests {
 
     #[test]
     fn trigger_when_price_above_take_profit() {
-        let (env, exec_id, oracle_id, portfolio_id, _) = setup();
+        let (env, exec_id, oracle_id, portfolio_id) = setup();
         let user = Address::generate(&env);
+
         MockOracleClient::new(&env, &oracle_id).set_price(&250);
         let exec = TradeExecutorContractClient::new(&env, &exec_id);
         exec.set_take_profit_price(&user, &2u64, &200);
+
         assert!(exec.check_and_trigger_take_profit(&user, &2u64, &0u32));
         assert_eq!(
             MockPortfolioClient::new(&env, &portfolio_id).last_closed(),
@@ -281,11 +296,13 @@ mod tests {
 
     #[test]
     fn take_profit_trigger_emits_event() {
-        let (env, exec_id, oracle_id, _, _) = setup();
+        let (env, exec_id, oracle_id, _) = setup();
         let user = Address::generate(&env);
+
         MockOracleClient::new(&env, &oracle_id).set_price(&300);
         let exec = TradeExecutorContractClient::new(&env, &exec_id);
         exec.set_take_profit_price(&user, &3u64, &200);
+
         exec.check_and_trigger_take_profit(&user, &3u64, &0u32);
         let found = env.events().all().iter().any(|e| {
             let topics: soroban_sdk::Vec<soroban_sdk::Val> = e.1.clone();
@@ -297,7 +314,7 @@ mod tests {
 
     #[test]
     fn stop_loss_priority_over_take_profit_on_simultaneous_trigger() {
-        let (env, exec_id, oracle_id, portfolio_id, _) = setup();
+        let (env, exec_id, oracle_id, portfolio_id) = setup();
         let user = Address::generate(&env);
         MockOracleClient::new(&env, &oracle_id).set_price(&50);
         let exec = TradeExecutorContractClient::new(&env, &exec_id);
