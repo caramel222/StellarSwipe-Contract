@@ -5,6 +5,8 @@ members = [
   "contracts/signal_registry",
   "contracts/auto_trade",
   "contracts/oracle",
+  "contracts/stake_vault",
+  "contracts/shared",
 ]
 
 [workspace.dependencies]
