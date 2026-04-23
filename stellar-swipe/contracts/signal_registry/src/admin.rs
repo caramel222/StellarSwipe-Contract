@@ -206,7 +206,7 @@ pub fn propose_admin_transfer(
         .instance()
         .set(&AdminStorageKey::PendingAdminTransfer, &pending);
 
-    emit_admin_transfer_proposed(env, caller.clone(), new_admin, expires_at_ledger);
+    emit_admin_transfer_proposed(env, caller.clone(), new_admin, expires_at_ledger as u64);
     Ok(())
 }
 
