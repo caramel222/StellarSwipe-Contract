@@ -24,6 +24,7 @@ mod submission;
 mod templates;
 mod test_reputation;
 mod types;
+mod migration;
 mod versioning;
 
 use admin::{
@@ -76,6 +77,12 @@ pub struct SignalRegistry;
 pub enum StorageKey {
     SignalCounter,
     Signals,
+    /// Legacy v1 signal map (pre-upgrade). Cleared as rows migrate to [`StorageKey::Signals`].
+    SignalsV1,
+    /// Next signal id to scan for v1→v2 migration (1-based, advances per batch).
+    MigrationCursor,
+    /// Snapshot count of v1 keys at migration start (for `MigrationProgress.total_count`).
+    MigrationV1TargetTotal,
     ProviderStats,
     /// Per-provider stake balances for trust and submission gates.
     ProviderStakes,
@@ -123,6 +130,18 @@ impl SignalRegistry {
             .instance()
             .set(&StorageKey::TradeExecutor, &executor);
         Ok(())
+    }
+
+    /// Admin: migrate batched v1 signal records from [`StorageKey::SignalsV1`] into v2
+    /// [`StorageKey::Signals`]. Idempotent; safe to call until all v1 rows are gone.
+    pub fn migrate_signals_v1_to_v2(
+        env: Env,
+        caller: Address,
+        batch_size: u32,
+    ) -> Result<(), AdminError> {
+        admin::require_admin(&env, &caller)?;
+        caller.require_auth();
+        migration::migrate_signals_v1_to_v2(&env, &caller, batch_size)
     }
 
     /* =========================
@@ -2084,6 +2103,8 @@ impl SignalRegistry {
 }
 
 #[cfg(test)]
+mod test;
+#[cfg(test)]
 mod test_adoption;
 #[cfg(test)]
 mod test_combos;
@@ -2091,13 +2112,11 @@ mod test_combos;
 mod test_contests;
 #[cfg(test)]
 mod test_emergency;
+#[cfg(test)]
 mod test_health;
 #[cfg(test)]
 mod test_scheduling;
 #[cfg(test)]
 mod test_signal_issues;
 #[cfg(test)]
-mod test_adoption;
-#[cfg(test)]
 mod test_admin_transfer;
-mod test_health;

@@ -1,4 +1,4 @@
-use crate::types::Asset;
+use crate::types::{Asset, MigrationProgress};
 use soroban_sdk::{contracttype, Address, Env, String, Symbol, Vec};
 
 // Horizon / indexer: first topic is only the event name (ScVal::Symbol);
