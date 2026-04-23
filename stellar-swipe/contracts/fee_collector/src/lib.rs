@@ -237,6 +237,10 @@ impl FeeCollector {
         }
 
         let fee_rate = rebates::get_fee_rate_for_user(&env, &trader);
+        // ROUNDING STRATEGY: user-paid fee truncates (rounds down) — user-favorable.
+        // Integer division in Rust truncates toward zero, so the user is never overcharged.
+        // Any sub-stroope remainder is intentionally discarded; it does not accumulate in
+        // the contract because it is never credited to any balance.
         let fee_amount = trade_amount
             .checked_mul(fee_rate as i128)
             .and_then(|amount| amount.checked_div(10_000))
@@ -252,12 +256,17 @@ impl FeeCollector {
             &fee_amount,
         );
 
-        // Burn slice
+        // ROUNDING STRATEGY: burn slice truncates (rounds down) — provider-favorable.
+        // burn_amount + distributable == fee_amount exactly (no dust):
+        //   distributable = fee_amount - burn_amount
+        // Because burn_amount is truncated, distributable is effectively rounded up,
+        // ensuring every stroop of fee_amount is either burned or credited to the treasury.
         let burn_rate = get_burn_rate(&env);
         let burn_amount = fee_amount
             .checked_mul(burn_rate as i128)
             .and_then(|v| v.checked_div(10_000))
             .ok_or(ContractError::ArithmeticOverflow)?;
+        // distributable = fee_amount - burn_amount: no remainder, no dust possible.
         let distributable = fee_amount
             .checked_sub(burn_amount)
             .ok_or(ContractError::ArithmeticOverflow)?;
