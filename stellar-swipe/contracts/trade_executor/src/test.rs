@@ -1,4 +1,5 @@
 #![cfg(test)]
+//! Additional integration tests; stop-loss / take-profit coverage is in `triggers::tests`.
 
 use crate::{
     errors::{ContractError, InsufficientBalanceDetail},
@@ -91,6 +92,7 @@ fn setup_with_balance(user_balance: i128) -> (Env, Address, Address, Address, Ad
     let exec = TradeExecutorContractClient::new(&env, &exec_id);
     exec.initialize(&admin);
     exec.set_user_portfolio(&portfolio_id);
+    exec.set_sdex_router(&router_id);
 
     (env, exec_id, portfolio_id, user, admin, token)
 }
@@ -440,7 +442,6 @@ fn swap_returns_actual_received() {
     let exec = TradeExecutorContractClient::new(&env, &exec_id);
 
     MockSdexRouterClient::new(&env, &router_id).set_amount_out(&500_000);
-
     let out = exec.swap(&token_a, &token_b, &1_000_000, &400_000);
     assert_eq!(out, 500_000);
 }
@@ -451,7 +452,6 @@ fn swap_reverts_when_balance_below_min() {
     env.mock_all_auths();
 
     let (exec_id, router_id, token_a, token_b) = setup_executor_with_router(&env);
-
     MockSdexRouterClient::new(&env, &router_id).set_amount_out(&300_000);
 
     let err = env.as_contract(&exec_id, || {
@@ -469,7 +469,6 @@ fn swap_with_slippage_matches_formula() {
     let exec = TradeExecutorContractClient::new(&env, &exec_id);
 
     MockSdexRouterClient::new(&env, &router_id).set_amount_out(&995_000);
-
     let out = exec.swap_with_slippage(&token_a, &token_b, &1_000_000, &100);
     assert_eq!(out, 995_000);
 }
@@ -480,7 +479,6 @@ fn swap_with_slippage_reverts_when_exceeded() {
     env.mock_all_auths();
 
     let (exec_id, router_id, token_a, token_b) = setup_executor_with_router(&env);
-
     MockSdexRouterClient::new(&env, &router_id).set_amount_out(&980_000);
 
     let min = sdex::min_received_from_slippage(1_000_000, 100).unwrap();
@@ -495,12 +493,11 @@ fn swap_with_slippage_reverts_when_exceeded() {
 #[contract]
 pub struct MockPortfolioWithPositions;
 
-#[contracttype]
-#[derive(Clone)]
-enum PortfolioKey {
-    Position(Address, u64),
-    LastClosed,
-}
+/// Unfilled trade expires after timeout; keeper can call without user auth; TradeExpired emitted.
+#[test]
+fn expire_trade_unfilled_after_timeout_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
 
 #[contractimpl]
 impl MockPortfolioWithPositions {
@@ -548,7 +545,6 @@ fn setup_cancel(router_out: i128) -> (Env, Address, Address, Address, Address, A
 
     let portfolio_id = env.register(MockPortfolioWithPositions, ());
     let exec_id = env.register(TradeExecutorContract, ());
-
     let exec = TradeExecutorContractClient::new(&env, &exec_id);
     exec.initialize(&admin);
     exec.set_user_portfolio(&portfolio_id);
@@ -556,15 +552,12 @@ fn setup_cancel(router_out: i128) -> (Env, Address, Address, Address, Address, A
 
     StellarAssetClient::new(&env, &token_a).mint(&exec_id, &1_000_000_000);
 
-    (
-        env,
-        exec_id,
-        portfolio_id,
-        user,
-        token_a,
-        token_b,
-        router_id,
-    )
+    env.ledger().with_mut(|l| l.sequence_number = 200);
+
+    let err = env.as_contract(&exec_id, || {
+        TradeExecutorContract::expire_trade(env.clone(), 2u64)
+    });
+    assert_eq!(err, Err(ContractError::TradeAlreadyFilled));
 }
 
 #[test]

@@ -12,7 +12,6 @@ use crate::errors::{ContractError, InsufficientBalanceDetail};
 pub const MAX_POSITIONS_PER_USER: u32 = 20;
 
 /// Default estimated fee budget (in token smallest units) included in the balance check.
-/// Covers typical Soroban + downstream invocation costs; override via admin storage if needed.
 pub const DEFAULT_ESTIMATED_COPY_TRADE_FEE: i128 = 500_000;
 
 /// Batched portfolio entrypoint: atomically validates the position cap and records the
