@@ -14,5 +14,4 @@ stellar_swipe_common = { path = "../common" }
 shared = { path = "../shared" }
 
 [dev-dependencies]
-signal_registry = { path = "../signal_registry" }
 soroban-sdk = { workspace = true, features = ["testutils"] }

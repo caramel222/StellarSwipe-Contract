@@ -144,7 +144,11 @@ impl FeeCollector {
             _ => return Err(ContractError::WithdrawalNotQueued),
         };
 
-        if env.ledger().timestamp() < queued.queued_at + SECONDS_PER_DAY {
+        if env.ledger().timestamp()
+            < queued.queued_at
+                .checked_add(SECONDS_PER_DAY)
+                .ok_or(ContractError::ArithmeticOverflow)?
+        {
             return Err(ContractError::TimelockNotElapsed);
         }
 
